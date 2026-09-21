@@ -4,6 +4,8 @@
 
 Shortmoji is a small native macOS menu-bar utility that turns `:skull:` into 💀 while you type. A compact suggestion panel appears near your cursor, helping you find emoji by name, alias, or related meaning without leaving your text field.
 
+![Shortmoji playground showing live emoji shortcode suggestions](screenshots/shortmoji-playground.png)
+
 ## Features
 
 - Type a prefix such as `:sku` to open related emoji suggestions.
