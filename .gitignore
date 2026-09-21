@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+release/
+.DS_Store
+*.xcuserstate
+qa/
+design-qa.md
