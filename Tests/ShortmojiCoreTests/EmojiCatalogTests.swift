@@ -5,15 +5,26 @@ final class EmojiCatalogTests: XCTestCase {
     func testSkullPrefixReturnsBothRelatedSkullEmojiFirst() {
         let results = EmojiCatalog.shared.search("sku", limit: 4)
         XCTAssertEqual(results.prefix(2).map(\.name), ["skull", "skull_and_crossbones"])
-        XCTAssertEqual(results.count, 2)
+        // A complete catalog also contains skunk, which matches this prefix.
     }
 
     func testShortcodeColonsAreIgnoredForExactMatches() {
         XCTAssertEqual(EmojiCatalog.shared.exactMatch(":skull:")?.emoji, "💀")
     }
 
+    func testExpandedCatalogIncludesPreviouslyMissingEmoji() {
+        XCTAssertGreaterThan(EmojiCatalog.shared.entries.count, 1800)
+        for (name, emoji) in [("ninja", "🥷"), ("melting_face", "🫠"),
+                              ("saluting_face", "🫡"), ("goose", "🪿")] {
+            XCTAssertEqual(EmojiCatalog.shared.exactMatch(":\(name):")?.emoji, emoji)
+            XCTAssertEqual(EmojiCatalog.shared.search(name).first?.emoji, emoji)
+        }
+        XCTAssertEqual(EmojiCatalog.shared.search("ninj").first?.emoji, "🥷")
+    }
+
     func testAliasesAndKeywordsAreSearchable() {
-        XCTAssertEqual(EmojiCatalog.shared.search("laugh").first?.name, "joy")
+        XCTAssertTrue(EmojiCatalog.shared.search("laugh").contains { $0.name == "joy" })
+        XCTAssertEqual(EmojiCatalog.shared.exactMatch("laughing")?.emoji, "😆")
         XCTAssertTrue(EmojiCatalog.shared.search("party").contains { $0.name == "tada" })
     }
 

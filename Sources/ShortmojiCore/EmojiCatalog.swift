@@ -60,7 +60,11 @@ public final class EmojiCatalog: @unchecked Sendable {
                     if normalized == query {
                         best = min(best, sourcePenalty)
                     } else if normalized.hasPrefix(query) {
-                        best = min(best, 8 + sourcePenalty + normalized.count - query.count)
+                        // Rank the matching word, so skull_and_crossbones stays
+                        // beside skull instead of losing to a shorter skunk name.
+                        let matchingLength = query.contains("_") ? normalized.count
+                            : (normalized.split(separator: "_").first?.count ?? normalized.count)
+                        best = min(best, 8 + sourcePenalty + matchingLength - query.count)
                     } else if normalized.split(separator: "_").contains(where: { $0.hasPrefix(query) }) {
                         best = min(best, 32 + sourcePenalty + normalized.count - query.count)
                     } else if normalized.contains(query) {

@@ -1,8 +1,9 @@
-import { chmod, copyFile, cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 const root = process.cwd();
+const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const developerDir = process.env.DEVELOPER_DIR || "/Applications/Xcode.app/Contents/Developer";
 const buildEnvironment = {
   ...process.env,
@@ -54,9 +55,9 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.0</string>
+  <string>${version}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${version}</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>
