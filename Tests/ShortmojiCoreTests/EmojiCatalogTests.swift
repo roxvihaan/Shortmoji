@@ -2,6 +2,21 @@ import XCTest
 @testable import ShortmojiCore
 
 final class EmojiCatalogTests: XCTestCase {
+    func testSkinTonesAreGroupedAndPreferencePreservesExplicitVariants() throws {
+        let catalog = EmojiCatalog.shared
+        XCTAssertFalse(catalog.search("ninja", limit: 100).contains { $0.hasSkinTone })
+        XCTAssertFalse(catalog.browsingEntries.contains { $0.hasSkinTone })
+        for (base, toned) in [("🥷", "🥷🏽"), ("👩‍💻", "👩🏽‍💻"), ("✋", "✋🏽"), ("🤝", "🤝🏽"), ("💀", "💀")] {
+            let entry = try XCTUnwrap(catalog.entries.first { $0.emoji == base })
+            XCTAssertEqual(catalog.applyingSkinTone(3, to: entry).emoji, toned)
+            XCTAssertEqual(catalog.applyingSkinTone(0, to: entry).emoji, base)
+            XCTAssertEqual(catalog.applyingSkinTone(3, to: entry).name, entry.name)
+            XCTAssertFalse(catalog.related(to: entry).contains { $0.hasSkinTone })
+        }
+        let explicit = try XCTUnwrap(catalog.entries.first { $0.emoji == "🫱🏻‍🫲🏼" })
+        XCTAssertEqual(catalog.applyingSkinTone(5, to: explicit), explicit)
+        XCTAssertTrue(catalog.search("ninja_medium_skin_tone").contains { $0.emoji == "🥷🏽" })
+    }
     func testEveryBundledEmojiHasAnExactShortcodeIncludingVariants() {
         let catalog = EmojiCatalog.shared
         XCTAssertEqual(catalog.entries.count, 3953)

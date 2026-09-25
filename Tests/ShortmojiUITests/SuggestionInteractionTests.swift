@@ -10,7 +10,7 @@ final class SuggestionInteractionTests: XCTestCase {
         let catalog = EmojiCatalog.shared
         controller.relatedProvider = { catalog.related(to: $0) }
         controller.searchProvider = { catalog.search($0, limit: 25) }
-        controller.browseProvider = { catalog.entries }
+        controller.browseProvider = { catalog.browsingEntries }
         var inserted: EmojiEntry?
         controller.chooseEntryHandler = { inserted = $0 }
         controller.show(entries: catalog.search("sku", limit: 6), selectedIndex: 0,
@@ -19,6 +19,11 @@ final class SuggestionInteractionTests: XCTestCase {
         let panel = try XCTUnwrap(NSApp.windows.first { String(describing: type(of: $0)) == "SuggestionPanel" })
         let content = try XCTUnwrap(panel.contentView)
         content.layoutSubtreeIfNeeded()
+        if let path = ProcessInfo.processInfo.environment["SHORTMOJI_QA_PATH"],
+           let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path + ".footer.png"))
+        }
         let footerTarget = try XCTUnwrap(content.hitTest(NSPoint(x: 65, y: 18)))
         XCTAssertEqual(String(describing: type(of: footerTarget)), "PopoverActionView")
         try click(footerTarget, in: panel)
@@ -32,12 +37,12 @@ final class SuggestionInteractionTests: XCTestCase {
         controller.chooseSelectedRelated()
         XCTAssertEqual(inserted?.emoji, catalog.search("heart", limit: 25).first?.emoji)
         XCTAssertTrue(controller.clearRelatedSearch())
-        let popup = try XCTUnwrap(descendant(NSPopUpButton.self, in: content))
+        let popup = try XCTUnwrap(descendant(NSPopUpButton.self, in: content, matching: { $0.itemTitles.contains("All emoji") }))
         popup.selectItem(withTitle: "All emoji")
         NSApp.sendAction(try XCTUnwrap(popup.action), to: popup.target, from: popup)
         content.layoutSubtreeIfNeeded()
         let table = try XCTUnwrap(descendant(NSTableView.self, in: content))
-        XCTAssertEqual(table.numberOfRows, (catalog.entries.count + 4) / 5)
+        XCTAssertEqual(table.numberOfRows, (catalog.browsingEntries.count + 4) / 5)
         XCTAssertLessThanOrEqual(content.bounds.height, 420)
         popup.selectItem(withTitle: "Flags")
         NSApp.sendAction(try XCTUnwrap(popup.action), to: popup.target, from: popup)
@@ -64,10 +69,32 @@ final class SuggestionInteractionTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
-    private func descendant<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
-        if let result = view as? T { return result }
+    func testTonePickerPersistsAndAppliesPreference() throws {
+        _ = NSApplication.shared
+        let old = UserDefaults.standard.object(forKey: "preferredSkinTone")
+        defer { UserDefaults.standard.set(old, forKey: "preferredSkinTone") }
+        let controller = SuggestionPanelController()
+        let ninja = try XCTUnwrap(EmojiCatalog.shared.exactMatch("ninja"))
+        controller.show(entries: [ninja], selectedIndex: 0, anchorTopLeft: NSPoint(x: 300, y: 600))
+        defer { controller.hide() }
+        let panel = try XCTUnwrap(NSApp.windows.first { String(describing: type(of: $0)) == "SuggestionPanel" && $0.isVisible })
+        let content = try XCTUnwrap(panel.contentView)
+        let picker = try XCTUnwrap(descendant(NSPopUpButton.self, in: content, matching: { $0.itemTitles.contains("✋🏽") }))
+        picker.selectItem(at: 3)
+        NSApp.sendAction(try XCTUnwrap(picker.action), to: picker.target, from: picker)
+        XCTAssertEqual(controller.preferredEntry(ninja).emoji, "🥷🏽")
+        XCTAssertEqual(SuggestionPanelController().preferredSkinTone, 3)
+        XCTAssertEqual(controller.entries.count, 1)
+        XCTAssertFalse(panel.isKeyWindow)
+        picker.selectItem(at: 0)
+        NSApp.sendAction(try XCTUnwrap(picker.action), to: picker.target, from: picker)
+        XCTAssertEqual(controller.preferredEntry(ninja).emoji, "🥷")
+    }
+
+    private func descendant<T: NSView>(_ type: T.Type, in view: NSView, matching predicate: (T) -> Bool = { _ in true }) -> T? {
+        if let result = view as? T, predicate(result) { return result }
         for child in view.subviews {
-            if let result = descendant(type, in: child) { return result }
+            if let result = descendant(type, in: child, matching: predicate) { return result }
         }
         return nil
     }

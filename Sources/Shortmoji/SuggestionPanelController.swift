@@ -21,6 +21,20 @@ final class SuggestionPanelController {
     var relatedProvider: ((EmojiEntry) -> [EmojiEntry])?
     var searchProvider: ((String) -> [EmojiEntry])?
     var browseProvider: (() -> [EmojiEntry])?
+    var preferredSkinTone: Int { UserDefaults.standard.integer(forKey: "preferredSkinTone") }
+
+    func preferredEntry(_ entry: EmojiEntry) -> EmojiEntry {
+        EmojiCatalog.shared.applyingSkinTone(preferredSkinTone, to: entry)
+    }
+
+    private func changeSkinTone(_ tone: Int) {
+        UserDefaults.standard.set(tone, forKey: "preferredSkinTone")
+        listView.tonePicker.selectItem(at: tone)
+        gridView.tonePicker.selectItem(at: tone)
+        listView.configure(entries: entries.map(preferredEntry), selectedIndex: selectedIndex)
+        gridView.configure(entries: relatedEntries.map(preferredEntry), selectedIndex: relatedSelectedIndex,
+                           searchQuery: relatedSearchQuery)
+    }
 
     var isVisible: Bool { panel.isVisible }
     var isMouseInside: Bool { panel.isVisible && panel.frame.contains(NSEvent.mouseLocation) }
@@ -83,6 +97,11 @@ final class SuggestionPanelController {
             self?.refreshRelatedSearch()
         }
         gridView.onMenuTracking = { [weak self] tracking in self?.isTrackingCategoryMenu = tracking }
+        for picker in [listView.tonePicker, gridView.tonePicker] {
+            picker.selectItem(at: min(5, max(0, preferredSkinTone)))
+            picker.onChange = { [weak self] tone in self?.changeSkinTone(tone) }
+            picker.onTracking = { [weak self] tracking in self?.isTrackingCategoryMenu = tracking }
+        }
     }
 
     func attach(to parent: NSWindow) {
@@ -102,7 +121,7 @@ final class SuggestionPanelController {
         relatedEntries = []
         listView.isHidden = false
         gridView.isHidden = true
-        listView.configure(entries: self.entries, selectedIndex: self.selectedIndex)
+        listView.configure(entries: self.entries.map(preferredEntry), selectedIndex: self.selectedIndex)
         resizeAndPosition(height: listView.preferredHeight)
         panel.orderFrontRegardless()
     }
@@ -110,14 +129,14 @@ final class SuggestionPanelController {
     func updateSelection(_ index: Int) {
         guard !entries.isEmpty else { return }
         selectedIndex = (index + entries.count) % entries.count
-        listView.configure(entries: entries, selectedIndex: selectedIndex)
+        listView.configure(entries: entries.map(preferredEntry), selectedIndex: selectedIndex)
     }
 
     func moveRelatedSelection(by offset: Int) {
         guard isShowingRelatedGrid, !relatedEntries.isEmpty else { return }
         relatedSelectedIndex = ((relatedSelectedIndex + offset) % relatedEntries.count + relatedEntries.count) % relatedEntries.count
         gridView.configure(
-            entries: relatedEntries,
+            entries: relatedEntries.map(preferredEntry),
             selectedIndex: relatedSelectedIndex,
             searchQuery: relatedSearchQuery
         )
@@ -149,7 +168,7 @@ final class SuggestionPanelController {
         isShowingRelatedGrid = true
         listView.isHidden = true
         gridView.isHidden = false
-        gridView.configure(entries: related, selectedIndex: relatedSelectedIndex, searchQuery: "")
+        gridView.configure(entries: related.map(preferredEntry), selectedIndex: relatedSelectedIndex, searchQuery: "")
         resizeAndPosition(height: gridView.preferredHeight)
     }
 
@@ -203,7 +222,7 @@ final class SuggestionPanelController {
         }
         relatedSelectedIndex = 0
         gridView.configure(
-            entries: relatedEntries,
+            entries: relatedEntries.map(preferredEntry),
             selectedIndex: relatedSelectedIndex,
             searchQuery: relatedSearchQuery
         )
@@ -243,6 +262,7 @@ private final class SuggestionListView: NSView {
     private let separator = NSBox(frame: .zero)
     private let similarButton = PopoverActionView(title: "See similar", symbolName: "square.grid.2x2")
     private let footer = NSTextField(labelWithString: "Return to insert")
+    let tonePicker = SkinTonePicker(frame: .zero, pullsDown: false)
     var onChoose: ((Int) -> Void)?
     var onShowSimilar: (() -> Void)?
 
@@ -263,6 +283,7 @@ private final class SuggestionListView: NSView {
         footer.alignment = .right
         footer.lineBreakMode = .byClipping
         addSubview(footer)
+        addSubview(tonePicker)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -294,12 +315,13 @@ private final class SuggestionListView: NSView {
         let footerTop = top
         separator.frame = NSRect(x: 0, y: footerTop - 1, width: bounds.width, height: 1)
         footer.frame = NSRect(
-            x: 156,
+            x: 220,
             y: 8,
-            width: bounds.width - 172,
+            width: bounds.width - 236,
             height: Metrics.footerHeight - 12
         )
         similarButton.frame = NSRect(x: 10, y: 4, width: 132, height: Metrics.footerHeight - 8)
+        tonePicker.frame = NSRect(x: 145, y: 5, width: 66, height: 28)
     }
 
 }
@@ -319,6 +341,7 @@ private final class RelatedEmojiGridView: NSView, NSTableViewDataSource, NSTable
     private let backButton = PopoverActionView(title: "Suggestions", symbolName: "chevron.left")
     private let categoryButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private let searchField = ForwardedSearchField(frame: .zero)
+    let tonePicker = SkinTonePicker(frame: .zero, pullsDown: false)
     private let separator = NSBox(frame: .zero)
     var onChoose: ((Int) -> Void)?
     var onBack: (() -> Void)?
@@ -352,6 +375,7 @@ private final class RelatedEmojiGridView: NSView, NSTableViewDataSource, NSTable
         searchField.font = .systemFont(ofSize: 12.5)
         searchField.onClear = { [weak self] in self?.onClearSearch?() }
         addSubview(searchField)
+        addSubview(tonePicker)
 
         separator.boxType = .separator
         addSubview(separator)
@@ -421,7 +445,8 @@ private final class RelatedEmojiGridView: NSView, NSTableViewDataSource, NSTable
         super.layout()
         backButton.frame = NSRect(x: 8, y: bounds.height - 35, width: 112, height: 28)
         categoryButton.frame = NSRect(x: 140, y: bounds.height - 35, width: bounds.width - 150, height: 28)
-        searchField.frame = NSRect(x: 10, y: bounds.height - 75, width: bounds.width - 20, height: 28)
+        searchField.frame = NSRect(x: 10, y: bounds.height - 75, width: bounds.width - 94, height: 28)
+        tonePicker.frame = NSRect(x: bounds.width - 76, y: bounds.height - 75, width: 66, height: 28)
         separator.frame = NSRect(x: 0, y: bounds.height - Metrics.headerHeight, width: bounds.width, height: 1)
 
         scrollView.frame = NSRect(x: Metrics.outerPadding, y: Metrics.outerPadding,
@@ -431,6 +456,29 @@ private final class RelatedEmojiGridView: NSView, NSTableViewDataSource, NSTable
         table.tableColumns.first?.width = scrollView.contentSize.width
     }
 
+}
+
+private final class SkinTonePicker: NSPopUpButton, NSMenuDelegate {
+    var onChange: ((Int) -> Void)?
+    var onTracking: ((Bool) -> Void)?
+
+    override init(frame: NSRect, pullsDown: Bool) {
+        super.init(frame: frame, pullsDown: pullsDown)
+        addItems(withTitles: ["✋", "✋🏻", "✋🏼", "✋🏽", "✋🏾", "✋🏿"])
+        let names = ["Default yellow", "Light", "Medium-light", "Medium", "Medium-dark", "Dark"]
+        for (index, item) in itemArray.enumerated() { item.setAccessibilityLabel(names[index]) }
+        font = .systemFont(ofSize: 17)
+        toolTip = "Preferred skin tone — applies to all supported emoji"
+        setAccessibilityLabel("Preferred skin tone")
+        target = self
+        action = #selector(changed)
+        menu?.delegate = self
+    }
+
+    required init?(coder: NSCoder) { nil }
+    @objc private func changed() { onChange?(indexOfSelectedItem) }
+    func menuWillOpen(_ menu: NSMenu) { onTracking?(true) }
+    func menuDidClose(_ menu: NSMenu) { onTracking?(false) }
 }
 
 // Labels are decorative: route their entire hit area to the owning control.
@@ -466,7 +514,6 @@ private final class ForwardedSearchField: NSSearchField {
 }
 
 private final class PopoverActionView: ClickTargetView {
-    private let imageView = NSImageView(frame: .zero)
     private let titleLabel = NSTextField(labelWithString: "")
     var onClick: (() -> Void)?
 
@@ -475,19 +522,24 @@ private final class PopoverActionView: ClickTargetView {
         wantsLayer = true
         layer?.cornerRadius = 6
 
+        let font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
         let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
-        imageView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.controlAccentColor]))
+        let attachment = NSTextAttachment()
+        attachment.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(symbolConfiguration)
-        imageView.contentTintColor = .controlAccentColor
-        imageView.imageScaling = .scaleProportionallyDown
-        imageView.imageAlignment = .alignCenter
-        imageView.imageFrameStyle = .none
-        addSubview(imageView)
-
-        titleLabel.stringValue = title
-        titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        // Keep the symbol and words in one text run. Center the symbol on the
+        // font's cap height, not on two unrelated view bounding boxes.
+        attachment.bounds = NSRect(x: 0, y: (font.capHeight - 12) / 2, width: 12, height: 12)
+        let label = NSMutableAttributedString(attachment: attachment)
+        label.append(NSAttributedString(string: "  " + title))
+        label.addAttributes([.font: font, .foregroundColor: NSColor.controlAccentColor],
+                            range: NSRange(location: 0, length: label.length))
+        titleLabel.attributedStringValue = label
+        titleLabel.font = font
         titleLabel.textColor = .controlAccentColor
         titleLabel.lineBreakMode = .byClipping
+        titleLabel.setAccessibilityLabel(title)
         addSubview(titleLabel)
     }
 
@@ -495,15 +547,10 @@ private final class PopoverActionView: ClickTargetView {
 
     override func layout() {
         super.layout()
-        let iconSize: CGFloat = 14
         let labelHeight = titleLabel.intrinsicContentSize.height
-        imageView.frame = NSRect(
-            x: 4, y: (bounds.height - iconSize) / 2,
-            width: iconSize, height: iconSize
-        )
         titleLabel.frame = NSRect(
-            x: 24, y: (bounds.height - labelHeight) / 2,
-            width: max(0, bounds.width - 28), height: labelHeight
+            x: 4, y: (bounds.height - labelHeight) / 2,
+            width: max(0, bounds.width - 8), height: labelHeight
         )
     }
 

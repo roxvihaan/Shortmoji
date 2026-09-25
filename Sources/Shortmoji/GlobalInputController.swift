@@ -38,7 +38,7 @@ final class GlobalInputController {
             self?.catalog.search(query, limit: Int.max) ?? []
         }
         suggestions.browseProvider = { [weak self] in
-            self?.catalog.entries ?? []
+            self?.catalog.browsingEntries ?? []
         }
     }
 
@@ -282,7 +282,7 @@ final class GlobalInputController {
     private func insert(_ entry: EmojiEntry, replacingCharacterCount count: Int) {
         replacementInFlight = true
         resetAndHide()
-        paste(entry.emoji, replacingCharacterCount: count)
+        paste(suggestions.preferredEntry(entry).emoji, replacingCharacterCount: count)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
             guard let self else { return }
             self.replacementInFlight = false

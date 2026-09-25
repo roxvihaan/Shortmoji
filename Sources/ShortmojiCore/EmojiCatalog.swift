@@ -16,6 +16,9 @@ public struct EmojiEntry: Codable, Hashable, Sendable {
     }
 
     public var shortcode: String { ":\(name):" }
+    public var hasSkinTone: Bool {
+        emoji.unicodeScalars.contains { (0x1F3FB...0x1F3FF).contains($0.value) }
+    }
 }
 
 public final class EmojiCatalog: @unchecked Sendable {
@@ -43,6 +46,21 @@ public final class EmojiCatalog: @unchecked Sendable {
     }
     private let index: [IndexedEntry]
     private let exact: [String: EmojiEntry]
+    private let tones: [String: [Int: String]]
+    public var browsingEntries: [EmojiEntry] { entries.filter { !$0.hasSkinTone } }
+
+    private static func familyKey(_ emoji: String) -> String {
+        String(String.UnicodeScalarView(emoji.unicodeScalars.filter {
+            !(0x1F3FB...0x1F3FF).contains($0.value) && $0.value != 0xFE0F
+        }))
+    }
+
+    /// Preserve explicit toned shortcodes; apply the preference only to base entries.
+    public func applyingSkinTone(_ tone: Int, to entry: EmojiEntry) -> EmojiEntry {
+        guard !entry.hasSkinTone, let glyph = tones[Self.familyKey(entry.emoji)]?[tone] else { return entry }
+        return EmojiEntry(emoji: glyph, name: entry.name, aliases: entry.aliases,
+                          keywords: entry.keywords, category: entry.category)
+    }
 
     public init(entries: [EmojiEntry]? = nil) {
         let loaded: [EmojiEntry]
@@ -59,6 +77,14 @@ public final class EmojiCatalog: @unchecked Sendable {
             ]
         }
         self.entries = loaded
+        var toneLookup: [String: [Int: String]] = [:]
+        for entry in loaded {
+            let modifiers = Set(entry.emoji.unicodeScalars.filter { (0x1F3FB...0x1F3FF).contains($0.value) }.map(\.value))
+            if modifiers.count == 1, let modifier = modifiers.first {
+                toneLookup[Self.familyKey(entry.emoji), default: [:]][Int(modifier - 0x1F3FA)] = entry.emoji
+            }
+        }
+        tones = toneLookup
         index = loaded.map(IndexedEntry.init)
         var lookup: [String: EmojiEntry] = [:]
         for entry in loaded { lookup[Self.normalize(entry.name)] = entry }
@@ -82,6 +108,7 @@ public final class EmojiCatalog: @unchecked Sendable {
         return index
             .compactMap { item -> (EmojiEntry, Int)? in
                 let entry = item.entry
+                if item.hasSkinTone && !query.contains("skin") && !query.contains("tone") { return nil }
                 var best = Int.max
 
                 for field in item.fields {
@@ -119,7 +146,7 @@ public final class EmojiCatalog: @unchecked Sendable {
         let source = IndexedEntry(entry)
 
         return index
-            .filter { $0.entry != entry }
+            .filter { $0.entry.name != entry.name && !$0.hasSkinTone }
             .compactMap { item -> (EmojiEntry, Int)? in
                 let candidate = item.entry
                 let overlap = source.terms.intersection(item.terms)

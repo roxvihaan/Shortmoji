@@ -40,7 +40,7 @@ final class DemoWindowController: NSWindowController, NSTextViewDelegate {
             self?.catalog.search(query, limit: Int.max) ?? []
         }
         suggestions.browseProvider = { [weak self] in
-            self?.catalog.entries ?? []
+            self?.catalog.browsingEntries ?? []
         }
         textView.interceptKey = { [weak self] event in
             self?.handleKey(event) ?? false
@@ -148,6 +148,7 @@ final class DemoWindowController: NSWindowController, NSTextViewDelegate {
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
+        if suggestions.isTrackingCategoryMenu { return false }
         if suggestions.isVisible {
             if suggestions.isShowingRelatedGrid {
                 switch Int(event.keyCode) {
@@ -209,7 +210,7 @@ final class DemoWindowController: NSWindowController, NSTextViewDelegate {
         if event.charactersIgnoringModifiers == ":",
            let queryRange,
            let match = catalog.exactMatch((textView.string as NSString).substring(with: queryRange)) {
-            replace(range: queryRange, with: match.emoji)
+            replace(range: queryRange, with: suggestions.preferredEntry(match).emoji)
             return true
         }
         return false
@@ -262,12 +263,12 @@ final class DemoWindowController: NSWindowController, NSTextViewDelegate {
 
     private func choose(index: Int) {
         guard matches.indices.contains(index), let queryRange else { return }
-        replace(range: queryRange, with: matches[index].emoji)
+        replace(range: queryRange, with: suggestions.preferredEntry(matches[index]).emoji)
     }
 
     private func choose(entry: EmojiEntry) {
         guard let queryRange else { return }
-        replace(range: queryRange, with: entry.emoji)
+        replace(range: queryRange, with: suggestions.preferredEntry(entry).emoji)
     }
 
     private func replace(range: NSRange, with emoji: String) {
