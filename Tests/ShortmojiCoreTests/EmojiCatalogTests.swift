@@ -2,6 +2,21 @@ import XCTest
 @testable import ShortmojiCore
 
 final class EmojiCatalogTests: XCTestCase {
+    func testEveryBundledEmojiHasAnExactShortcodeIncludingVariants() {
+        let catalog = EmojiCatalog.shared
+        XCTAssertEqual(catalog.entries.count, 3953)
+        for entry in catalog.entries {
+            XCTAssertEqual(catalog.exactMatch(entry.shortcode)?.emoji, entry.emoji, entry.shortcode)
+            var query = ShortcodeQueryBuffer()
+            query.begin()
+            XCTAssertNotNil(query.append(entry.name), entry.name)
+        }
+        for emoji in ["🥷🏽", "🫱🏻‍🫲🏼", "🏳️‍🌈", "🇺🇸", "👩🏽‍💻"] {
+            XCTAssertTrue(catalog.entries.contains { $0.emoji == emoji }, emoji)
+        }
+        XCTAssertEqual(catalog.search("ninja").first?.emoji, "🥷")
+    }
+
     func testSkullPrefixReturnsBothRelatedSkullEmojiFirst() {
         let results = EmojiCatalog.shared.search("sku", limit: 4)
         XCTAssertEqual(results.prefix(2).map(\.name), ["skull", "skull_and_crossbones"])

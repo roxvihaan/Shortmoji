@@ -5,12 +5,14 @@ public struct EmojiEntry: Codable, Hashable, Sendable {
     public let name: String
     public let aliases: [String]
     public let keywords: [String]
+    public let category: String?
 
-    public init(emoji: String, name: String, aliases: [String] = [], keywords: [String] = []) {
+    public init(emoji: String, name: String, aliases: [String] = [], keywords: [String] = [], category: String? = nil) {
         self.emoji = emoji
         self.name = name
         self.aliases = aliases
         self.keywords = keywords
+        self.category = category
     }
 
     public var shortcode: String { ":\(name):" }
@@ -19,53 +21,81 @@ public struct EmojiEntry: Codable, Hashable, Sendable {
 public final class EmojiCatalog: @unchecked Sendable {
     public static let shared = EmojiCatalog()
     public let entries: [EmojiEntry]
+    private struct IndexedEntry {
+        let entry: EmojiEntry
+        let fields: [(text: String, penalty: Int, words: [String])]
+        let terms: Set<String>
+        let nameTerms: Set<String>
+        let keywordTerms: Set<String>
+        let hasSkinTone: Bool
+
+        init(_ entry: EmojiEntry) {
+            self.entry = entry
+            fields = ([entry.name] + entry.aliases + entry.keywords).enumerated().map { index, field in
+                let text = EmojiCatalog.normalize(field)
+                return (text, index == 0 ? 0 : (index <= entry.aliases.count ? 40 : 85), text.split(separator: "_").map(String.init))
+            }
+            nameTerms = Set(([entry.name] + entry.aliases).flatMap(EmojiCatalog.searchTerms))
+            keywordTerms = Set(entry.keywords.flatMap(EmojiCatalog.searchTerms))
+            terms = nameTerms.union(keywordTerms)
+            hasSkinTone = entry.emoji.unicodeScalars.contains { (0x1F3FB...0x1F3FF).contains($0.value) }
+        }
+    }
+    private let index: [IndexedEntry]
+    private let exact: [String: EmojiEntry]
 
     public init(entries: [EmojiEntry]? = nil) {
+        let loaded: [EmojiEntry]
         if let entries {
-            self.entries = entries
-            return
-        }
-
-        guard let url = Bundle.module.url(forResource: "emoji", withExtension: "json"),
+            loaded = entries
+        } else if let url = Bundle.module.url(forResource: "emoji", withExtension: "json"),
               let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([EmojiEntry].self, from: data) else {
-            self.entries = [
+              let decoded = try? JSONDecoder().decode([EmojiEntry].self, from: data) {
+            loaded = decoded
+        } else {
+            loaded = [
                 EmojiEntry(emoji: "💀", name: "skull", keywords: ["death", "dead", "skeleton"]),
                 EmojiEntry(emoji: "☠️", name: "skull_and_crossbones", keywords: ["death", "danger", "pirate", "skull"]),
             ]
-            return
         }
-        self.entries = decoded
+        self.entries = loaded
+        index = loaded.map(IndexedEntry.init)
+        var lookup: [String: EmojiEntry] = [:]
+        for entry in loaded { lookup[Self.normalize(entry.name)] = entry }
+        for entry in loaded {
+            for alias in entry.aliases where lookup[Self.normalize(alias)] == nil {
+                lookup[Self.normalize(alias)] = entry
+            }
+        }
+        exact = lookup
     }
 
     public func exactMatch(_ rawQuery: String) -> EmojiEntry? {
         let query = Self.normalize(rawQuery)
-        return entries.first { entry in
-            entry.name == query || entry.aliases.contains(query)
-        }
+        return exact[query]
     }
 
     public func search(_ rawQuery: String, limit: Int = 8) -> [EmojiEntry] {
         let query = Self.normalize(rawQuery)
         guard !query.isEmpty else { return [] }
 
-        return entries
-            .compactMap { entry -> (EmojiEntry, Int)? in
-                let fields = [entry.name] + entry.aliases + entry.keywords
+        return index
+            .compactMap { item -> (EmojiEntry, Int)? in
+                let entry = item.entry
                 var best = Int.max
 
-                for (index, field) in fields.enumerated() {
-                    let normalized = Self.normalize(field)
-                    let sourcePenalty = index == 0 ? 0 : (index <= entry.aliases.count ? 40 : 85)
+                for field in item.fields {
+                    let normalized = field.text
+                    let sourcePenalty = field.penalty
                     if normalized == query {
                         best = min(best, sourcePenalty)
                     } else if normalized.hasPrefix(query) {
                         // Rank the matching word, so skull_and_crossbones stays
                         // beside skull instead of losing to a shorter skunk name.
                         let matchingLength = query.contains("_") ? normalized.count
-                            : (normalized.split(separator: "_").first?.count ?? normalized.count)
+                            : (field.words.first?.count ?? normalized.count)
                         best = min(best, 8 + sourcePenalty + matchingLength - query.count)
-                    } else if normalized.split(separator: "_").contains(where: { $0.hasPrefix(query) }) {
+                    } else if field.words.contains(where: { $0.hasPrefix(query) }) {
                         best = min(best, 32 + sourcePenalty + normalized.count - query.count)
                     } else if normalized.contains(query) {
                         best = min(best, 58 + sourcePenalty + normalized.count - query.count)
@@ -74,7 +104,8 @@ public final class EmojiCatalog: @unchecked Sendable {
                     }
                 }
 
-                return best == Int.max ? nil : (entry, best)
+                let variantPenalty = item.hasSkinTone && !query.contains("skin") && !query.contains("tone") ? 20 : 0
+                return best == Int.max ? nil : (entry, best + variantPenalty)
             }
             .sorted { lhs, rhs in
                 if lhs.1 == rhs.1 { return lhs.0.name < rhs.0.name }
@@ -85,25 +116,17 @@ public final class EmojiCatalog: @unchecked Sendable {
     }
 
     public func related(to entry: EmojiEntry, limit: Int = 25) -> [EmojiEntry] {
-        let sourceTerms = Set(
-            ([entry.name] + entry.aliases + entry.keywords)
-                .flatMap { Self.searchTerms($0) }
-        )
+        let source = IndexedEntry(entry)
 
-        return entries
-            .filter { $0 != entry }
-            .compactMap { candidate -> (EmojiEntry, Int)? in
-                let candidateTerms = Set(
-                    ([candidate.name] + candidate.aliases + candidate.keywords)
-                        .flatMap { Self.searchTerms($0) }
-                )
-                let overlap = sourceTerms.intersection(candidateTerms)
+        return index
+            .filter { $0.entry != entry }
+            .compactMap { item -> (EmojiEntry, Int)? in
+                let candidate = item.entry
+                let overlap = source.terms.intersection(item.terms)
                 guard !overlap.isEmpty else { return nil }
 
-                let keywordOverlap = Set(entry.keywords.flatMap { Self.searchTerms($0) })
-                    .intersection(Set(candidate.keywords.flatMap { Self.searchTerms($0) }))
-                let nameOverlap = Set(([entry.name] + entry.aliases).flatMap { Self.searchTerms($0) })
-                    .intersection(Set(([candidate.name] + candidate.aliases).flatMap { Self.searchTerms($0) }))
+                let keywordOverlap = source.keywordTerms.intersection(item.keywordTerms)
+                let nameOverlap = source.nameTerms.intersection(item.nameTerms)
                 let score = nameOverlap.count * 150 + keywordOverlap.count * 100 + overlap.count * 10
                 return (candidate, score)
             }

@@ -12,8 +12,8 @@ public struct ShortcodeQueryBuffer: Sendable {
     }
 
     @discardableResult
-    public mutating func append(_ characters: String, maximumLength: Int = 48) -> String? {
-        guard var value, value.count < maximumLength else { return nil }
+    public mutating func append(_ characters: String, maximumLength: Int = 256) -> String? {
+        guard var value, value.count + characters.count <= maximumLength else { return nil }
         value.append(characters)
         self.value = value
         return value

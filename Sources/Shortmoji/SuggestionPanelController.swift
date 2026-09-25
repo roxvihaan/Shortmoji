@@ -11,13 +11,16 @@ final class SuggestionPanelController {
     private var relatedEntries: [EmojiEntry] = []
     private var relatedSelectedIndex = 0
     private var relatedSearchQuery = ""
+    private var browseCategory = "Similar"
     private(set) var entries: [EmojiEntry] = []
     private(set) var selectedIndex = 0
     private(set) var isShowingRelatedGrid = false
+    private(set) var isTrackingCategoryMenu = false
     var chooseHandler: ((Int) -> Void)?
     var chooseEntryHandler: ((EmojiEntry) -> Void)?
     var relatedProvider: ((EmojiEntry) -> [EmojiEntry])?
     var searchProvider: ((String) -> [EmojiEntry])?
+    var browseProvider: (() -> [EmojiEntry])?
 
     var isVisible: Bool { panel.isVisible }
     var isMouseInside: Bool { panel.isVisible && panel.frame.contains(NSEvent.mouseLocation) }
@@ -75,6 +78,11 @@ final class SuggestionPanelController {
         gridView.onClearSearch = { [weak self] in
             _ = self?.clearRelatedSearch()
         }
+        gridView.onCategory = { [weak self] category in
+            self?.browseCategory = category
+            self?.refreshRelatedSearch()
+        }
+        gridView.onMenuTracking = { [weak self] tracking in self?.isTrackingCategoryMenu = tracking }
     }
 
     func attach(to parent: NSWindow) {
@@ -107,7 +115,7 @@ final class SuggestionPanelController {
 
     func moveRelatedSelection(by offset: Int) {
         guard isShowingRelatedGrid, !relatedEntries.isEmpty else { return }
-        relatedSelectedIndex = (relatedSelectedIndex + offset + relatedEntries.count) % relatedEntries.count
+        relatedSelectedIndex = ((relatedSelectedIndex + offset) % relatedEntries.count + relatedEntries.count) % relatedEntries.count
         gridView.configure(
             entries: relatedEntries,
             selectedIndex: relatedSelectedIndex,
@@ -132,12 +140,12 @@ final class SuggestionPanelController {
         guard entries.indices.contains(selectedIndex),
               let relatedProvider else { return }
         let related = relatedProvider(entries[selectedIndex])
-        guard !related.isEmpty else { return }
-
         initialRelatedEntries = related
         relatedEntries = related
         relatedSelectedIndex = 0
         relatedSearchQuery = ""
+        browseCategory = "Similar"
+        gridView.resetCategory()
         isShowingRelatedGrid = true
         listView.isHidden = true
         gridView.isHidden = false
@@ -186,9 +194,12 @@ final class SuggestionPanelController {
 
     private func refreshRelatedSearch() {
         if relatedSearchQuery.isEmpty {
-            relatedEntries = initialRelatedEntries
+            relatedEntries = browseCategory == "Similar" ? initialRelatedEntries : (browseProvider?() ?? [])
         } else {
             relatedEntries = searchProvider?(relatedSearchQuery) ?? []
+        }
+        if browseCategory != "Similar", browseCategory != "All emoji" {
+            relatedEntries = relatedEntries.filter { $0.category == browseCategory }
         }
         relatedSelectedIndex = 0
         gridView.configure(
@@ -293,7 +304,7 @@ private final class SuggestionListView: NSView {
 
 }
 
-private final class RelatedEmojiGridView: NSView {
+private final class RelatedEmojiGridView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private enum Metrics {
         static let columns = 5
         static let outerPadding: CGFloat = 7
@@ -301,17 +312,22 @@ private final class RelatedEmojiGridView: NSView {
         static let cellHeight: CGFloat = 64
     }
 
-    private var cells: [RelatedEmojiCellView] = []
+    private var entries: [EmojiEntry] = []
+    private var selectedIndex = 0
+    private let scrollView = NSScrollView(frame: .zero)
+    private let table = NSTableView(frame: .zero)
     private let backButton = PopoverActionView(title: "Suggestions", symbolName: "chevron.left")
-    private let titleLabel = NSTextField(labelWithString: "Similar emoji")
+    private let categoryButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private let searchField = ForwardedSearchField(frame: .zero)
     private let separator = NSBox(frame: .zero)
     var onChoose: ((Int) -> Void)?
     var onBack: (() -> Void)?
     var onClearSearch: (() -> Void)?
+    var onCategory: ((String) -> Void)?
+    var onMenuTracking: ((Bool) -> Void)?
 
     var preferredHeight: CGFloat {
-        let rows = Int(ceil(Double(max(1, cells.count)) / Double(Metrics.columns)))
+        let rows = min(5, Int(ceil(Double(max(1, entries.count)) / Double(Metrics.columns))))
         return Metrics.headerHeight + Metrics.outerPadding * 2 + CGFloat(rows) * Metrics.cellHeight
     }
 
@@ -321,10 +337,13 @@ private final class RelatedEmojiGridView: NSView {
         backButton.onClick = { [weak self] in self?.onBack?() }
         addSubview(backButton)
 
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.alignment = .center
-        titleLabel.textColor = .labelColor
-        addSubview(titleLabel)
+        categoryButton.addItems(withTitles: ["Similar", "All emoji", "Smileys & Emotion", "People & Body",
+            "Animals & Nature", "Food & Drink", "Travel & Places", "Activities", "Objects", "Symbols", "Flags", "Component"])
+        categoryButton.font = .systemFont(ofSize: 12.5, weight: .medium)
+        categoryButton.target = self
+        categoryButton.action = #selector(categoryChanged)
+        categoryButton.menu?.delegate = self
+        addSubview(categoryButton)
 
         searchField.placeholderString = "Search emoji"
         searchField.isEditable = false
@@ -336,42 +355,80 @@ private final class RelatedEmojiGridView: NSView {
 
         separator.boxType = .separator
         addSubview(separator)
+
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        table.headerView = nil
+        table.backgroundColor = .clear
+        table.rowHeight = Metrics.cellHeight
+        table.intercellSpacing = .zero
+        table.selectionHighlightStyle = .none
+        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("emoji")))
+        table.dataSource = self
+        table.delegate = self
+        scrollView.documentView = table
+        addSubview(scrollView)
     }
 
     required init?(coder: NSCoder) { nil }
 
     func configure(entries: [EmojiEntry], selectedIndex: Int, searchQuery: String) {
-        cells.forEach { $0.removeFromSuperview() }
-        cells = entries.enumerated().map { index, entry in
-            let cell = RelatedEmojiCellView(entry: entry, isSelected: index == selectedIndex)
-            cell.onClick = { [weak self] in self?.onChoose?(index) }
-            addSubview(cell)
-            return cell
+        let changed = self.entries != entries
+        let previousIndex = self.selectedIndex
+        self.entries = entries
+        self.selectedIndex = selectedIndex
+        if changed {
+            table.reloadData()
+        } else if !entries.isEmpty {
+            table.reloadData(forRowIndexes: IndexSet([previousIndex / 5, selectedIndex / 5]), columnIndexes: IndexSet(integer: 0))
         }
+        if !entries.isEmpty { table.scrollRowToVisible(selectedIndex / 5) }
         searchField.stringValue = searchQuery
         needsLayout = true
+    }
+
+    func resetCategory() { categoryButton.selectItem(withTitle: "Similar") }
+
+    @objc private func categoryChanged() {
+        onCategory?(categoryButton.titleOfSelectedItem ?? "Similar")
+    }
+
+    func menuWillOpen(_ menu: NSMenu) { onMenuTracking?(true) }
+    func menuDidClose(_ menu: NSMenu) { onMenuTracking?(false) }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { (entries.count + 4) / 5 }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let identifier = NSUserInterfaceItemIdentifier("emojiRow")
+        let view = tableView.makeView(withIdentifier: identifier, owner: self) ?? NSView(frame: .zero)
+        view.identifier = identifier
+        view.subviews.forEach { $0.removeFromSuperview() }
+        let width = floor(tableView.bounds.width / 5)
+        for index in (row * 5)..<min(row * 5 + 5, entries.count) {
+            let cell = RelatedEmojiCellView(entry: entries[index], isSelected: index == selectedIndex)
+            cell.frame = NSRect(x: CGFloat(index % 5) * width, y: 0, width: width, height: Metrics.cellHeight)
+            cell.toolTip = entries[index].shortcode
+            cell.onClick = { [weak self] in self?.onChoose?(index) }
+            view.addSubview(cell)
+        }
+        return view
     }
 
     override func layout() {
         super.layout()
         backButton.frame = NSRect(x: 8, y: bounds.height - 35, width: 112, height: 28)
-        titleLabel.frame = NSRect(x: 120, y: bounds.height - 31, width: bounds.width - 240, height: 20)
+        categoryButton.frame = NSRect(x: 140, y: bounds.height - 35, width: bounds.width - 150, height: 28)
         searchField.frame = NSRect(x: 10, y: bounds.height - 75, width: bounds.width - 20, height: 28)
         separator.frame = NSRect(x: 0, y: bounds.height - Metrics.headerHeight, width: bounds.width, height: 1)
 
-        let availableWidth = bounds.width - Metrics.outerPadding * 2
-        let cellWidth = floor(availableWidth / CGFloat(Metrics.columns))
-        let contentTop = bounds.height - Metrics.headerHeight - Metrics.outerPadding
-        for (index, cell) in cells.enumerated() {
-            let row = index / Metrics.columns
-            let column = index % Metrics.columns
-            cell.frame = NSRect(
-                x: Metrics.outerPadding + CGFloat(column) * cellWidth,
-                y: contentTop - CGFloat(row + 1) * Metrics.cellHeight,
-                width: cellWidth,
-                height: Metrics.cellHeight
-            )
-        }
+        scrollView.frame = NSRect(x: Metrics.outerPadding, y: Metrics.outerPadding,
+            width: bounds.width - Metrics.outerPadding * 2,
+            height: bounds.height - Metrics.headerHeight - Metrics.outerPadding * 2)
+        table.frame.size.width = scrollView.contentSize.width
+        table.tableColumns.first?.width = scrollView.contentSize.width
     }
 
 }

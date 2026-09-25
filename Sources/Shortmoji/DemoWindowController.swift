@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 import ShortmojiCore
 
 final class DemoWindowController: NSWindowController, NSTextViewDelegate {
-    private let catalog = EmojiCatalog.shared
+    private lazy var catalog = EmojiCatalog.shared
     private let suggestions = SuggestionPanelController(appearance: NSAppearance(named: .aqua))
     private let textView = DemoTextView(frame: .zero)
     private var matches: [EmojiEntry] = []
@@ -33,11 +33,14 @@ final class DemoWindowController: NSWindowController, NSTextViewDelegate {
         suggestions.chooseEntryHandler = { [weak self] entry in
             self?.choose(entry: entry)
         }
-        suggestions.relatedProvider = { [catalog] entry in
-            catalog.related(to: entry)
+        suggestions.relatedProvider = { [weak self] entry in
+            self?.catalog.related(to: entry) ?? []
         }
-        suggestions.searchProvider = { [catalog] query in
-            catalog.search(query, limit: 25)
+        suggestions.searchProvider = { [weak self] query in
+            self?.catalog.search(query, limit: Int.max) ?? []
+        }
+        suggestions.browseProvider = { [weak self] in
+            self?.catalog.entries ?? []
         }
         textView.interceptKey = { [weak self] event in
             self?.handleKey(event) ?? false

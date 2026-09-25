@@ -4,7 +4,8 @@ import Carbon.HIToolbox
 import ShortmojiCore
 
 final class GlobalInputController {
-    private let catalog: EmojiCatalog
+    private let catalogProvider: () -> EmojiCatalog
+    private lazy var catalog = catalogProvider()
     private let suggestions: SuggestionPanelController
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -21,8 +22,8 @@ final class GlobalInputController {
     private var deferredEvents: [CGEvent] = []
     private var isDrainingDeferredEvents = false
 
-    init(catalog: EmojiCatalog = .shared, suggestions: SuggestionPanelController) {
-        self.catalog = catalog
+    init(catalog: @autoclosure @escaping () -> EmojiCatalog = .shared, suggestions: SuggestionPanelController) {
+        self.catalogProvider = catalog
         self.suggestions = suggestions
         suggestions.chooseHandler = { [weak self] index in
             self?.choose(index: index)
@@ -30,11 +31,14 @@ final class GlobalInputController {
         suggestions.chooseEntryHandler = { [weak self] entry in
             self?.choose(entry: entry)
         }
-        suggestions.relatedProvider = { entry in
-            catalog.related(to: entry)
+        suggestions.relatedProvider = { [weak self] entry in
+            self?.catalog.related(to: entry) ?? []
         }
-        suggestions.searchProvider = { query in
-            catalog.search(query, limit: 25)
+        suggestions.searchProvider = { [weak self] query in
+            self?.catalog.search(query, limit: Int.max) ?? []
+        }
+        suggestions.browseProvider = { [weak self] in
+            self?.catalog.entries ?? []
         }
     }
 
@@ -118,7 +122,11 @@ final class GlobalInputController {
             return nil
         }
 
+        // Let AppKit own input while its category menu tracks outside the panel.
+        if suggestions.isTrackingCategoryMenu { return Unmanaged.passUnretained(event) }
+
         if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
+            guard queryBuffer.isActive || suggestions.isVisible else { return Unmanaged.passUnretained(event) }
             if suggestions.isMouseInside {
                 return Unmanaged.passUnretained(event)
             }
@@ -131,7 +139,7 @@ final class GlobalInputController {
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate])
         if !flags.isEmpty {
-            resetAndHide()
+            if queryBuffer.isActive || suggestions.isVisible { resetAndHide() }
             return Unmanaged.passUnretained(event)
         }
 
@@ -202,7 +210,7 @@ final class GlobalInputController {
 
         if [kVK_ForwardDelete, kVK_LeftArrow, kVK_RightArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown]
             .contains(Int(keyCode)) {
-            resetAndHide()
+            if queryBuffer.isActive || suggestions.isVisible { resetAndHide() }
             return Unmanaged.passUnretained(event)
         }
 
@@ -252,7 +260,8 @@ final class GlobalInputController {
 
         let delay = afterEvent ? 0.018 : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, !self.matches.isEmpty else { return }
+            guard let self, !self.matches.isEmpty, self.queryBuffer.value == activeQuery,
+                  !self.suggestions.isShowingRelatedGrid else { return }
             if let anchor = self.focusedCaretAnchor() {
                 self.lastAnchor = anchor
             }
